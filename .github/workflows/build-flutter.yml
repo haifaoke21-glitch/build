@@ -6,6 +6,9 @@ on:
       userId:  { required: false }
       payload: { required: true }
 
+env:
+  DEFAULT_FLUTTER: "3.41.x"
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -43,7 +46,10 @@ jobs:
         run: |
           D="${{ steps.dir.outputs.d }}"
           FV="${{ steps.p.outputs.flutter_version }}"
-          if [ -z "$FV" ]; then
+          USE_STABLE=false
+          if [ "$FV" = "stable" ]; then USE_STABLE=true; FV=""; fi
+
+          if [ -z "$FV" ] && [ "$USE_STABLE" = "false" ]; then
             for f in "$D/.fvmrc" "$D/.fvm/fvm_config.json" "$D/.flutter-version" "$D/.tool-versions"; do
               [ -f "$f" ] || continue
               case "$f" in
@@ -56,9 +62,12 @@ jobs:
             done
           fi
           FV=$(echo "$FV" | sed -E 's/^v//; s/-stable$//; s/@.*//')
-          if ! echo "$FV" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then FV=""; fi
+          if ! echo "$FV" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+|\.x)?$'; then FV=""; fi
+          if [ -z "$FV" ] && [ "$USE_STABLE" = "false" ]; then FV="$DEFAULT_FLUTTER"; fi
+
           echo "flutter_version=$FV" >> $GITHUB_OUTPUT
-          echo "Flutter pinned: ${FV:-stable terbaru}"
+          echo "use_stable=$USE_STABLE" >> $GITHUB_OUTPUT
+          echo "Flutter: ${FV:-stable terbaru}"
 
           W=$(find project -name gradle-wrapper.properties | head -n1)
           JV=17
@@ -75,7 +84,7 @@ jobs:
           distribution: temurin
           java-version: ${{ steps.ver.outputs.java_version }}
 
-      - name: Setup Flutter (versi project)
+      - name: Setup Flutter (versi tertentu)
         if: steps.p.outputs.engine != 'native' && steps.ver.outputs.flutter_version != ''
         uses: subosito/flutter-action@v2
         with:
@@ -83,7 +92,7 @@ jobs:
           cache: true
 
       - name: Setup Flutter (stable terbaru)
-        if: steps.p.outputs.engine != 'native' && steps.ver.outputs.flutter_version == ''
+        if: steps.p.outputs.engine != 'native' && steps.ver.outputs.use_stable == 'true'
         uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -97,8 +106,8 @@ jobs:
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
 
-      - name: Naikkan Gradle jika terlalu rendah (hanya Flutter stable)
-        if: steps.p.outputs.engine != 'native' && steps.ver.outputs.flutter_version == ''
+      - name: Naikkan Gradle jika terlalu rendah (hanya stable terbaru)
+        if: steps.p.outputs.engine != 'native' && steps.ver.outputs.use_stable == 'true'
         run: |
           MIN=8.14
           f="${{ steps.dir.outputs.d }}/android/gradle/wrapper/gradle-wrapper.properties"
@@ -113,8 +122,8 @@ jobs:
             fi
           fi
 
-      - name: Naikkan AGP dan Kotlin jika terlalu rendah (hanya Flutter stable)
-        if: steps.p.outputs.engine != 'native' && steps.ver.outputs.flutter_version == ''
+      - name: Naikkan AGP dan Kotlin jika terlalu rendah (hanya stable terbaru)
+        if: steps.p.outputs.engine != 'native' && steps.ver.outputs.use_stable == 'true'
         env:
           ANDROID_DIR: ${{ steps.dir.outputs.d }}/android
         run: |
