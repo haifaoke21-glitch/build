@@ -113,33 +113,41 @@ jobs:
             fi
           fi
 
-      - name: Naikkan AGP jika terlalu rendah (hanya Flutter stable)
+      - name: Naikkan AGP dan Kotlin jika terlalu rendah (hanya Flutter stable)
         if: steps.p.outputs.engine != 'native' && steps.ver.outputs.flutter_version == ''
         env:
           ANDROID_DIR: ${{ steps.dir.outputs.d }}/android
         run: |
           python3 - <<'PY'
-          import os, re, glob
-          MIN = "8.11.1"
-          mint = tuple(int(x) for x in MIN.split("."))
+          import os, re
+          MIN_AGP = "8.11.1"
+          MIN_KOTLIN = "2.2.20"
           def tup(v): return tuple(int(x) for x in v.split("."))
-          def bump(prefix, ver, suffix=""):
-              if tup(ver) < mint:
-                  print(f"AGP {ver} -> {MIN}")
-                  return prefix + MIN + suffix
-              print(f"AGP {ver} sudah cukup")
-              return prefix + ver + suffix
-          pat1 = re.compile(r'''(com\.android\.(?:application|library|test)["']?\)?\s+version\s+["'])(\d+(?:\.\d+)*)(["'])''')
-          pat2 = re.compile(r'''(com\.android\.tools\.build:gradle:)(\d+(?:\.\d+)*)''')
+          def make(label, minv):
+              def f(m):
+                  ver = m.group(2)
+                  g3 = m.group(3) if m.lastindex and m.lastindex >= 3 else ""
+                  if tup(ver) < tup(minv):
+                      print(f"{label} {ver} -> {minv}")
+                      return m.group(1) + minv + g3
+                  print(f"{label} {ver} sudah cukup")
+                  return m.group(0)
+              return f
+          rules = [
+            (re.compile(r'''(com\.android\.(?:application|library|test)["']?\)?\s+version\s+["'])(\d+(?:\.\d+)*)(["'])'''), make("AGP", MIN_AGP)),
+            (re.compile(r'''(com\.android\.tools\.build:gradle:)(\d+(?:\.\d+)*)'''), make("AGP", MIN_AGP)),
+            (re.compile(r'''(org\.jetbrains\.kotlin\.(?:android|jvm)["']?\)?\s+version\s+["'])(\d+(?:\.\d+)*)(["'])'''), make("Kotlin", MIN_KOTLIN)),
+            (re.compile(r'''(org\.jetbrains\.kotlin:kotlin-gradle-plugin:)(\d+(?:\.\d+)*)'''), make("Kotlin", MIN_KOTLIN)),
+            (re.compile(r'''(kotlin_version\s*=\s*["'])(\d+(?:\.\d+)*)(["'])'''), make("Kotlin", MIN_KOTLIN)),
+          ]
           root = os.environ["ANDROID_DIR"]
-          files = []
           for name in ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts"):
               p = os.path.join(root, name)
-              if os.path.isfile(p): files.append(p)
-          for p in files:
+              if not os.path.isfile(p): continue
               s = open(p, encoding="utf-8").read()
-              n = pat1.sub(lambda m: bump(m.group(1), m.group(2), m.group(3)), s)
-              n = pat2.sub(lambda m: bump(m.group(1), m.group(2)), n)
+              n = s
+              for rx, fn in rules:
+                  n = rx.sub(fn, n)
               if n != s:
                   open(p, "w", encoding="utf-8").write(n)
                   print("diubah:", p)
