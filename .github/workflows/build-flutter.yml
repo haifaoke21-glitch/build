@@ -1,0 +1,68 @@
+name: build-flutter
+on:
+  workflow_dispatch:
+    inputs:
+      jobId:   { required: true }
+      userId:  { required: false }
+      payload: { required: true }
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baca payload
+        id: p
+        run: |
+          echo '${{ inputs.payload }}' > payload.json
+          echo "url=$(jq -r .url payload.json)" >> $GITHUB_OUTPUT
+          echo "build_type=$(jq -r '.buildType // "release"' payload.json)" >> $GITHUB_OUTPUT
+          echo "perf_mode=$(jq -r '.perfMode // "fast"' payload.json)" >> $GITHUB_OUTPUT
+          echo "engine=$(jq -r '.engine // "flutter"' payload.json)" >> $GITHUB_OUTPUT
+
+      - name: Download & unzip source
+        run: |
+          curl -L --fail -o src.zip "${{ steps.p.outputs.url }}"
+          mkdir project && unzip -q src.zip -d project
+
+      - name: Cari folder project
+        id: dir
+        run: |
+          if [ "${{ steps.p.outputs.engine }}" = "native" ]; then
+            echo "d=project" >> $GITHUB_OUTPUT
+          else
+            f=$(find project -maxdepth 3 -name pubspec.yaml | head -n1)
+            echo "d=$(dirname "$f")" >> $GITHUB_OUTPUT
+          fi
+
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+
+      - uses: subosito/flutter-action@v2
+        if: steps.p.outputs.engine != 'native'
+        with: { channel: stable, cache: true }
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Build APK
+        id: build
+        env:
+          BUILD_TYPE:  ${{ steps.p.outputs.build_type }}
+          PERF_MODE:   ${{ steps.p.outputs.perf_mode }}
+          ENGINE:      ${{ steps.p.outputs.engine }}
+          PROJECT_DIR: ${{ steps.dir.outputs.d }}
+        run: bash scripts/build-profile.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apk-${{ inputs.jobId }}
+          path: ${{ steps.build.outputs.apk_path }}
+          retention-days: 1
