@@ -9,7 +9,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -21,6 +21,7 @@ jobs:
           echo "build_type=$(jq -r '.buildType // "release"' payload.json)" >> $GITHUB_OUTPUT
           echo "perf_mode=$(jq -r '.perfMode // "fast"' payload.json)" >> $GITHUB_OUTPUT
           echo "engine=$(jq -r '.engine // "flutter"' payload.json)" >> $GITHUB_OUTPUT
+          echo "flutter_version=$(jq -r '.flutterVersion // ""' payload.json)" >> $GITHUB_OUTPUT
 
       - name: Download & unzip source
         run: |
@@ -37,12 +38,56 @@ jobs:
             echo "d=$(dirname "$f")" >> $GITHUB_OUTPUT
           fi
 
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: "17" }
+      - name: Deteksi versi (Flutter, Java)
+        id: ver
+        run: |
+          D="${{ steps.dir.outputs.d }}"
+          FV="${{ steps.p.outputs.flutter_version }}"
+          if [ -z "$FV" ]; then
+            for f in "$D/.fvmrc" "$D/.fvm/fvm_config.json" "$D/.flutter-version" "$D/.tool-versions"; do
+              [ -f "$f" ] || continue
+              case "$f" in
+                *.fvmrc) FV=$(jq -r '.flutter // empty' "$f" 2>/dev/null || true) ;;
+                *fvm_config.json) FV=$(jq -r '.flutterSdkVersion // empty' "$f" 2>/dev/null || true) ;;
+                *.flutter-version) FV=$(head -n1 "$f") ;;
+                *.tool-versions) FV=$(grep -E '^flutter ' "$f" | awk '{print $2}' | head -n1) ;;
+              esac
+              [ -n "$FV" ] && break
+            done
+          fi
+          FV=$(echo "$FV" | sed -E 's/^v//; s/-stable$//; s/@.*//')
+          if ! echo "$FV" | grep -qE '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then FV=""; fi
+          echo "flutter_version=$FV" >> $GITHUB_OUTPUT
+          echo "Flutter pinned: ${FV:-stable terbaru}"
 
-      - uses: subosito/flutter-action@v2
-        if: steps.p.outputs.engine != 'native'
-        with: { channel: stable, cache: true }
+          W=$(find project -name gradle-wrapper.properties | head -n1)
+          JV=17
+          if [ -n "$W" ]; then
+            G=$(sed -nE 's#.*gradle-([0-9.]+)-(all|bin)\.zip.*#\1#p' "$W" | head -n1)
+            MAJOR=${G%%.*}
+            if [ -n "$MAJOR" ] && [ "$MAJOR" -lt 7 ]; then JV=11; fi
+          fi
+          echo "java_version=$JV" >> $GITHUB_OUTPUT
+          echo "Java: $JV"
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ steps.ver.outputs.java_version }}
+
+      - name: Setup Flutter (versi project)
+        if: steps.p.outputs.engine != 'native' && steps.ver.outputs.flutter_version != ''
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ steps.ver.outputs.flutter_version }}
+          cache: true
+
+      - name: Setup Flutter (stable terbaru)
+        if: steps.p.outputs.engine != 'native' && steps.ver.outputs.flutter_version == ''
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
 
       - uses: actions/cache@v4
         with:
@@ -51,6 +96,22 @@ jobs:
             ~/.gradle/wrapper
           key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
           restore-keys: gradle-${{ runner.os }}-
+
+      - name: Naikkan Gradle jika terlalu rendah (hanya Flutter stable)
+        if: steps.p.outputs.engine != 'native' && steps.ver.outputs.flutter_version == ''
+        run: |
+          MIN=8.14
+          f="${{ steps.dir.outputs.d }}/android/gradle/wrapper/gradle-wrapper.properties"
+          if [ -f "$f" ]; then
+            cur=$(sed -nE 's#.*gradle-([0-9.]+)-(all|bin)\.zip.*#\1#p' "$f" | head -n1)
+            small=$(printf '%s\n%s\n' "$cur" "$MIN" | sort -V | head -n1)
+            if [ -n "$cur" ] && [ "$cur" != "$MIN" ] && [ "$small" = "$cur" ]; then
+              echo "Gradle $cur -> $MIN"
+              sed -i -E "s#gradle-[0-9.]+-(all|bin)\.zip#gradle-$MIN-bin.zip#" "$f"
+            else
+              echo "Gradle $cur sudah cukup, tidak diubah"
+            fi
+          fi
 
       - name: Build APK
         id: build
