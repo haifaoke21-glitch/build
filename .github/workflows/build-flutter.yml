@@ -113,6 +113,38 @@ jobs:
             fi
           fi
 
+      - name: Naikkan AGP jika terlalu rendah (hanya Flutter stable)
+        if: steps.p.outputs.engine != 'native' && steps.ver.outputs.flutter_version == ''
+        env:
+          ANDROID_DIR: ${{ steps.dir.outputs.d }}/android
+        run: |
+          python3 - <<'PY'
+          import os, re, glob
+          MIN = "8.11.1"
+          mint = tuple(int(x) for x in MIN.split("."))
+          def tup(v): return tuple(int(x) for x in v.split("."))
+          def bump(prefix, ver, suffix=""):
+              if tup(ver) < mint:
+                  print(f"AGP {ver} -> {MIN}")
+                  return prefix + MIN + suffix
+              print(f"AGP {ver} sudah cukup")
+              return prefix + ver + suffix
+          pat1 = re.compile(r'''(com\.android\.(?:application|library|test)["']?\)?\s+version\s+["'])(\d+(?:\.\d+)*)(["'])''')
+          pat2 = re.compile(r'''(com\.android\.tools\.build:gradle:)(\d+(?:\.\d+)*)''')
+          root = os.environ["ANDROID_DIR"]
+          files = []
+          for name in ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts"):
+              p = os.path.join(root, name)
+              if os.path.isfile(p): files.append(p)
+          for p in files:
+              s = open(p, encoding="utf-8").read()
+              n = pat1.sub(lambda m: bump(m.group(1), m.group(2), m.group(3)), s)
+              n = pat2.sub(lambda m: bump(m.group(1), m.group(2)), n)
+              if n != s:
+                  open(p, "w", encoding="utf-8").write(n)
+                  print("diubah:", p)
+          PY
+
       - name: Build APK
         id: build
         env:
